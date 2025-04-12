@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net"
 	"net/http"
+	"strconv"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -141,9 +142,9 @@ func listen(addr string) error {
 
 		// Update the metrics
 		PacketTotal.Inc()
-		PacketByProtocol.WithLabelValues(string(data.IpProtocol)).Inc()
+		PacketByProtocol.WithLabelValues(strconv.Itoa(data.IpProtocol)).Inc()
 		PacketsByInterface.WithLabelValues(data.OobIn).Inc()
-		PacketsByDestPort.WithLabelValues(string(data.DestPort)).Inc()
+		PacketsByDestPort.WithLabelValues(strconv.Itoa(data.DestPort)).Inc()
 		PacketsBySrcIP.WithLabelValues(data.SrcIp).Inc()
 		PacketSizeHistogram.Observe(float64(len))
 	}
