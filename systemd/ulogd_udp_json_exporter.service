@@ -1,0 +1,13 @@
+[Unit]
+Description=Server Daemon
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/ulogd_udp_json_exporter --listen 127.0.0.1:10210 --metrics 127.0.0.1:10211
+Restart=always
+User=65534
+Group=65534
+EnvironmentFile=-/etc/default/server
+
+[Install]
+WantedBy=multi-user.target
