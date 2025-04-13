@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"net"
 	"net/http"
-	"strconv"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -140,29 +139,20 @@ func listen(addr string) error {
 			continue
 		}
 
+		protoName := getProtoByNumber(data.IpProtocol)
+		var serviceName string
+		if protoName == "" {
+			serviceName = getServiceByPort(data.DestPort, "tcp")
+		} else {
+			serviceName = getServiceByPort(data.DestPort, protoName)
+		}
+
 		// Update the metrics
 		PacketTotal.Inc()
-		PacketByProtocol.WithLabelValues(protoColToString(data.IpProtocol)).Inc()
+		PacketByProtocol.WithLabelValues(protoName).Inc()
 		PacketsByInterface.WithLabelValues(data.OobIn).Inc()
-		PacketsByDestPort.WithLabelValues(strconv.Itoa(data.DestPort)).Inc()
+		PacketsByDestPort.WithLabelValues(serviceName).Inc()
 		PacketsBySrcIP.WithLabelValues(data.SrcIp).Inc()
 		PacketSizeHistogram.Observe(float64(len))
-	}
-}
-
-func protoColToString(protoCol int) string {
-	switch protoCol {
-	case 1:
-		return "ICMP"
-	case 2:
-		return "IGMP"
-	case 6:
-		return "TCP"
-	case 17:
-		return "UDP"
-	case 132:
-		return "SCTP"
-	default:
-		return strconv.Itoa(protoCol)
 	}
 }
