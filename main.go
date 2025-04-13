@@ -142,10 +142,27 @@ func listen(addr string) error {
 
 		// Update the metrics
 		PacketTotal.Inc()
-		PacketByProtocol.WithLabelValues(strconv.Itoa(data.IpProtocol)).Inc()
+		PacketByProtocol.WithLabelValues(protoColToString(data.IpProtocol)).Inc()
 		PacketsByInterface.WithLabelValues(data.OobIn).Inc()
 		PacketsByDestPort.WithLabelValues(strconv.Itoa(data.DestPort)).Inc()
 		PacketsBySrcIP.WithLabelValues(data.SrcIp).Inc()
 		PacketSizeHistogram.Observe(float64(len))
+	}
+}
+
+func protoColToString(protoCol int) string {
+	switch protoCol {
+	case 1:
+		return "ICMP"
+	case 2:
+		return "IGMP"
+	case 6:
+		return "TCP"
+	case 17:
+		return "UDP"
+	case 132:
+		return "SCTP"
+	default:
+		return strconv.Itoa(protoCol)
 	}
 }
