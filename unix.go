@@ -9,8 +9,6 @@ import (
 	"unsafe"
 )
 
-var serventSize = 1024
-
 func getServiceByPort(port int, proto string) string {
 	cProto := C.CString(proto)
 	defer C.free(unsafe.Pointer(cProto))
