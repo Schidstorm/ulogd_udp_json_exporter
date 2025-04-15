@@ -1,29 +1,45 @@
 package main
 
 // #cgo CFLAGS: -g -Wall
-// #include <stdlib.h>
 // #include <netdb.h>
+// #include <stdlib.h>
+// #include <unistd.h>
+/*
+
+typedef struct servent servent_t;
+*/
 import "C"
 import (
 	"strconv"
 	"unsafe"
 )
 
+var serverventBUfferSize = C.sysconf(C._SC_GETPW_R_SIZE_MAX)
+
 func getServiceByPort(port int, proto string) string {
 	cProto := C.CString(proto)
 	defer C.free(unsafe.Pointer(cProto))
 
-	servent := C.getservbyport(C.int(port), cProto)
-	if servent == nil {
+	var servent C.struct_servent
+	var result *C.struct_servent
+	bufSize := C.size_t(4096)
+	buf := C.malloc(bufSize)
+	defer C.free(buf)
+
+	errno := C.getservbyport_r(
+		C.int(C.htons(C.ushort(port))), // important: htons!
+		cProto,
+		&servent,
+		(*C.char)(buf),
+		bufSize,
+		&result,
+	)
+
+	if errno != 0 || result == nil {
 		return strconv.Itoa(port)
 	}
 
-	name := C.GoString(servent.s_name)
-	if name == "" {
-		return strconv.Itoa(port)
-	}
-
-	return name
+	return C.GoString(result.s_name)
 }
 
 func getProtoByNumber(proto int) string {
