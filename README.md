@@ -16,15 +16,17 @@ A simple Prometheus exporter that listens for `ulogd2` JSON logs over UDP and ex
 
 ## 📊 Exposed Metrics
 
-| Metric Name                             | Labels              | Description                                       |
-|----------------------------------------|---------------------|---------------------------------------------------|
-| `ulogd_packets_total`                  | —                   | Total number of received (blocked) packets        |
-| `ulogd_packets_by_protocol_total`      | `protocol`          | Count of packets grouped by IP protocol           |
-| `ulogd_packets_by_interface_total`     | `interface`         | Count of packets per incoming interface           |
-| `ulogd_packets_by_dest_port_total`     | `port`              | Count of packets grouped by destination port      |
-| `ulogd_packets_by_src_ip_total`        | `src_ip`            | Count of packets grouped by source IP             |
-| `ulogd_packet_size_bytes`              | — (Histogram)       | Distribution of packet sizes in bytes             |
-| `ulogd_json_parse_errors_total`        | —                   | Number of malformed or failed JSON log entries    |
+| Metric Name                             | Labels                        | Description                                           |
+|----------------------------------------|-------------------------------|-------------------------------------------------------|
+| `ulogd_packets_total`                  | `prefix`                      | Total number of received (blocked) packets            |
+| `ulogd_packets_by_protocol_total`      | `prefix`, `protocol`          | Count of packets grouped by IP protocol              |
+| `ulogd_packets_by_interface_total`     | `prefix`, `iif`, `oif`        | Count of packets per incoming and outgoing interface |
+| `ulogd_packets_by_dest_port_total`     | `prefix`, `port`              | Count of packets grouped by destination port         |
+| `ulogd_packets_by_src_ip_total`        | `prefix`, `src_ip`            | Count of packets grouped by source IP                |
+| `ulogd_packets_by_dest_ip_total`       | `prefix`, `dest_ip`           | Count of packets grouped by destination IP           |
+| `ulogd_packet_size_bytes`              | `prefix` (Histogram)          | Distribution of packet sizes in bytes                |
+| `ulogd_json_parse_errors_total`        | —                             | Number of malformed or failed JSON log entries       |
+| `ulogd_packet_read_errors_total`       | —                             | Number of times reading from the UDP socket failed   |
 
 ---
 
@@ -76,10 +78,10 @@ port="9999"
 To log and drop packets (e.g., SSH brute-force attempts):
 
 ```nft
-log group 1 drop
+log prefix "reject" group 1 drop
 ```
 
-This sends log messages to `ulogd2` via NFLOG group `1`.
+This sends log messages to `ulogd2` via NFLOG group `1` and prefix `reject`.
 
 ---
 

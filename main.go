@@ -43,7 +43,7 @@ var (
 			Name: "ulogd_packets_by_interface_total",
 			Help: "Total packets per input network interface",
 		},
-		[]string{"prefix", "interface"},
+		[]string{"prefix", "iif", "oif"},
 	)
 	PacketsByDestPort = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
@@ -58,6 +58,13 @@ var (
 			Help: "Total packets grouped by source IP address",
 		},
 		[]string{"prefix", "src_ip"},
+	)
+	PacketsByDestIP = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "ulogd_packets_by_dest_ip_total",
+			Help: "Total packets grouped by destination IP address",
+		},
+		[]string{"prefix", "dest_ip"},
 	)
 	PacketSizeHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
@@ -104,6 +111,7 @@ func main() {
 	prometheus.MustRegister(PacketsByInterface)
 	prometheus.MustRegister(PacketsByDestPort)
 	prometheus.MustRegister(PacketsBySrcIP)
+	prometheus.MustRegister(PacketsByDestIP)
 	prometheus.MustRegister(PacketSizeHistogram)
 	prometheus.MustRegister(JsonParseErrors)
 	prometheus.MustRegister(PacketReadErrors)
@@ -158,9 +166,10 @@ func listen(addr string) error {
 		// Update the metrics
 		PacketTotal.WithLabelValues(data.Prefix).Inc()
 		PacketByProtocol.WithLabelValues(data.Prefix, protoName).Inc()
-		PacketsByInterface.WithLabelValues(data.Prefix, data.OobIn).Inc()
+		PacketsByInterface.WithLabelValues(data.Prefix, data.OobIn, data.OobOut).Inc()
 		PacketsByDestPort.WithLabelValues(data.Prefix, serviceName).Inc()
 		PacketsBySrcIP.WithLabelValues(data.Prefix, data.SrcIp).Inc()
+		PacketsByDestIP.WithLabelValues(data.Prefix, data.DestIp).Inc()
 		PacketSizeHistogram.WithLabelValues(data.Prefix).Observe(float64(len))
 	}
 }
