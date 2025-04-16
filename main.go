@@ -20,7 +20,7 @@ type UlogdMessage struct {
 	OobOut     string `json:"oob.out"`
 	SrcIp      string `json:"src_ip"`
 	DestIp     string `json:"dest_ip"`
-	Message    string `json:"message"`
+	Prefix     string `json:"oob.prefix"`
 }
 
 var (
@@ -29,35 +29,35 @@ var (
 			Name: "ulogd_packets_total",
 			Help: "Total number of blocked packets",
 		},
-		[]string{"message"},
+		[]string{"prefix"},
 	)
 	PacketByProtocol = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "ulogd_packets_by_protocol_total",
 			Help: "Total number of packets grouped by IP protocol",
 		},
-		[]string{"message", "protocol"},
+		[]string{"prefix", "protocol"},
 	)
 	PacketsByInterface = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "ulogd_packets_by_interface_total",
 			Help: "Total packets per input network interface",
 		},
-		[]string{"message", "interface"},
+		[]string{"prefix", "interface"},
 	)
 	PacketsByDestPort = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "ulogd_packets_by_dest_port_total",
 			Help: "Total packets per destination port",
 		},
-		[]string{"message", "port"},
+		[]string{"prefix", "port"},
 	)
 	PacketsBySrcIP = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "ulogd_packets_by_src_ip_total",
 			Help: "Total packets grouped by source IP address",
 		},
-		[]string{"message", "src_ip"},
+		[]string{"prefix", "src_ip"},
 	)
 	PacketSizeHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
@@ -65,7 +65,7 @@ var (
 			Help:    "Histogram of packet sizes",
 			Buckets: prometheus.ExponentialBuckets(64, 2, 10), // 64B to ~32KB
 		},
-		[]string{"message"},
+		[]string{"prefix"},
 	)
 	JsonParseErrors = prometheus.NewCounter(
 		prometheus.CounterOpts{
@@ -156,11 +156,11 @@ func listen(addr string) error {
 		protoName, serviceName := GetProtoAndService(data.DestPort, data.IpProtocol)
 
 		// Update the metrics
-		PacketTotal.WithLabelValues(data.Message).Inc()
-		PacketByProtocol.WithLabelValues(data.Message, protoName).Inc()
-		PacketsByInterface.WithLabelValues(data.Message, data.OobIn).Inc()
-		PacketsByDestPort.WithLabelValues(data.Message, serviceName).Inc()
-		PacketsBySrcIP.WithLabelValues(data.Message, data.SrcIp).Inc()
-		PacketSizeHistogram.WithLabelValues(data.Message).Observe(float64(len))
+		PacketTotal.WithLabelValues(data.Prefix).Inc()
+		PacketByProtocol.WithLabelValues(data.Prefix, protoName).Inc()
+		PacketsByInterface.WithLabelValues(data.Prefix, data.OobIn).Inc()
+		PacketsByDestPort.WithLabelValues(data.Prefix, serviceName).Inc()
+		PacketsBySrcIP.WithLabelValues(data.Prefix, data.SrcIp).Inc()
+		PacketSizeHistogram.WithLabelValues(data.Prefix).Observe(float64(len))
 	}
 }
