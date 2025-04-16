@@ -13,9 +13,9 @@ import (
 )
 
 type UlogdMessage struct {
-	IpProtocol int    `json:"ip.protocol"`
+	IpProtocol int32  `json:"ip.protocol"`
 	SrcPort    int    `json:"src_port"`
-	DestPort   int    `json:"dest_port"`
+	DestPort   int32  `json:"dest_port"`
 	OobIn      string `json:"oob.in"`
 	OobOut     string `json:"oob.out"`
 	SrcIp      string `json:"src_ip"`
@@ -68,6 +68,12 @@ var (
 			Help: "Number of times JSON parsing failed",
 		},
 	)
+	PacketReadErrors = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "ulogd_packet_read_errors_total",
+			Help: "Number of times reading from UDP socket failed",
+		},
+	)
 )
 
 func main() {
@@ -95,6 +101,7 @@ func main() {
 	prometheus.MustRegister(PacketsBySrcIP)
 	prometheus.MustRegister(PacketSizeHistogram)
 	prometheus.MustRegister(JsonParseErrors)
+	prometheus.MustRegister(PacketReadErrors)
 
 	// Start the Prometheus metrics server
 	go func() {
@@ -128,7 +135,9 @@ func listen(addr string) error {
 	for {
 		len, _, err := conn.ReadFromUDP(buf[0:])
 		if err != nil {
-			return err
+			PacketReadErrors.Inc()
+			log.Debug().Err(err).Msg("Error reading from UDP socket")
+			continue
 		}
 
 		// Parse the JSON data
@@ -139,13 +148,7 @@ func listen(addr string) error {
 			continue
 		}
 
-		protoName := getProtoByNumber(data.IpProtocol)
-		var serviceName string
-		if protoName == "" {
-			serviceName = getServiceByPort(data.DestPort, "tcp")
-		} else {
-			serviceName = getServiceByPort(data.DestPort, protoName)
-		}
+		protoName, serviceName := GetProtoAndService(data.DestPort, data.IpProtocol)
 
 		// Update the metrics
 		PacketTotal.Inc()
