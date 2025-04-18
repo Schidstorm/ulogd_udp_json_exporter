@@ -1,4 +1,4 @@
-package main
+package exporter
 
 // #cgo CFLAGS: -g -Wall
 // #include <netdb.h>
