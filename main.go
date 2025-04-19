@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"io"
 	"net/http"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -10,7 +9,6 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/schidstorm/ulogd_udp_json_exporter/pkg/exporter"
-	"github.com/schidstorm/ulogd_udp_json_exporter/pkg/nflog"
 	"github.com/spf13/cobra"
 )
 
@@ -30,35 +28,20 @@ func rootCommand() *cobra.Command {
 		Use:   "ulogd_udp_json_exporter",
 		Short: "Run the ulogd UDP JSON exporter",
 		Run: func(cmd *cobra.Command, args []string) {
-			listenAddr, _ := cmd.Flags().GetString("listen")
 			metricsAddr, _ := cmd.Flags().GetString("metrics")
-
-			log.Info().Msg("Starting nflog")
-			nf := initNflog()
-			defer nf.Close()
-
-			log.Info().Str("metrics", metricsAddr).Msg("Starting metrics server")
+			group, _ := cmd.Flags().GetInt("group")
 			go runMetricsServer(metricsAddr)
 
-			log.Info().Str("address", listenAddr).Msg("Starting UDP listener")
-			if err := exporter.RunExporter(listenAddr); err != nil {
+			log.Info().Msg("Starting Exporter")
+			if err := exporter.RunExporter(group); err != nil {
 				log.Fatal().Err(err).Msg("Error running exporter")
 			}
 		},
 	}
 
-	cmd.Flags().StringP("listen", "l", ":9999", "UDP address to listen on")
 	cmd.Flags().StringP("metrics", "m", ":8080", "HTTP address to expose metrics on")
+	cmd.Flags().IntP("group", "g", 0, "nflog group to listen on")
 	return cmd
-}
-
-func initNflog() io.Closer {
-	nf := nflog.NewNfLog(0)
-	if err := nf.Start(); err != nil {
-		log.Fatal().Err(err).Msg("Error starting nflog")
-	}
-
-	return nf
 }
 
 func runMetricsServer(metricsAddr string) {

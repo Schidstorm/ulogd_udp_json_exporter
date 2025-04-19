@@ -1,6 +1,6 @@
 # ulogd_udp_json_exporter
 
-A simple Prometheus exporter that listens for `ulogd2` JSON logs over UDP and exposes various network traffic metrics.
+A simple Prometheus exporter that uses `libnetfilter-log` to read network logs and exposes various network traffic metrics.
 
 > Designed for logging and monitoring network packet drops (e.g., via `nftables`), with rich, customizable metrics for observability.
 
@@ -8,7 +8,7 @@ A simple Prometheus exporter that listens for `ulogd2` JSON logs over UDP and ex
 
 ## 📦 Features
 
-- Listens on a UDP port for JSON-formatted logs from `ulogd2`
+- Reads messages from `libnetfilter-log`
 - Parses common netfilter fields (`src_ip`, `dest_port`, `ip.protocol`, etc.)
 - Exposes metrics via HTTP in Prometheus format
 
@@ -35,41 +35,11 @@ A simple Prometheus exporter that listens for `ulogd2` JSON logs over UDP and ex
 ### 🛠️ Run
 
 ```bash
-go run main.go --listen :9999 --metrics :8080
+go run main.go --group 1 --metrics :8080
 ```
 
-- `--listen`: UDP address to receive `ulogd2` logs
+- `--group`: Log group to read from
 - `--metrics`: HTTP address to expose Prometheus metrics
-
----
-
-## 🧪 Example `ulogd.conf`
-
-Here's a working configuration for `ulogd2` with JSON UDP output:
-
-```ini
-[global]
-logfile="syslog"
-loglevel=3
-
-plugin="/usr/lib/aarch64-linux-gnu/ulogd/ulogd_inppkt_NFLOG.so"
-plugin="/usr/lib/aarch64-linux-gnu/ulogd/ulogd_filter_IFINDEX.so"
-plugin="/usr/lib/aarch64-linux-gnu/ulogd/ulogd_filter_IP2STR.so"
-plugin="/usr/lib/aarch64-linux-gnu/ulogd/ulogd_filter_HWHDR.so"
-plugin="/usr/lib/aarch64-linux-gnu/ulogd/ulogd_raw2packet_BASE.so"
-plugin="/usr/lib/aarch64-linux-gnu/ulogd/ulogd_output_JSON.so"
-
-stack=log2:NFLOG,base1:BASE,ifi1:IFINDEX,ip2str1:IP2STR,mac2str1:HWHDR,json1:JSON
-
-[log2]
-group=1
-
-[json1]
-sync=1
-mode="udp"
-host="127.0.0.1"
-port="9999"
-```
 
 ---
 
@@ -81,7 +51,7 @@ To log and drop packets (e.g., SSH brute-force attempts):
 log prefix "reject" group 1 drop
 ```
 
-This sends log messages to `ulogd2` via NFLOG group `1` and prefix `reject`.
+This logs messages via NFLOG group `1` and prefix `reject`.
 
 ---
 
@@ -100,7 +70,7 @@ scrape_configs:
 
 ## 🙏 Credits
 
-- [ulogd2](https://www.netfilter.org/projects/ulogd/)
+- [libnetfilter-log](https://www.netfilter.org/projects/libnetfilter_log)
 - [Prometheus Go client](https://github.com/prometheus/client_golang)
 - [Cobra CLI](https://github.com/spf13/cobra)
 - [Zerolog](https://github.com/rs/zerolog)

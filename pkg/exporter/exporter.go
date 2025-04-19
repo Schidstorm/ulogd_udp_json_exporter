@@ -1,11 +1,8 @@
 package exporter
 
 import (
-	"encoding/json"
-	"net"
-
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/rs/zerolog/log"
+	"github.com/schidstorm/ulogd_udp_json_exporter/pkg/nflog"
 )
 
 var (
@@ -84,7 +81,7 @@ type UlogdMessage struct {
 	Prefix     string `json:"oob.prefix"`
 }
 
-func RunExporter(listenAddr string) error {
+func RunExporter(group int) error {
 	prometheus.MustRegister(PacketTotal)
 	prometheus.MustRegister(PacketByProtocol)
 	prometheus.MustRegister(PacketsByInterface)
@@ -95,45 +92,30 @@ func RunExporter(listenAddr string) error {
 	prometheus.MustRegister(JsonParseErrors)
 	prometheus.MustRegister(PacketReadErrors)
 
-	udpAddr, err := net.ResolveUDPAddr("udp", listenAddr)
-	if err != nil {
-		return err
+	return nflog.NewNfLog(group).Start(nfLogCallback)
+}
+
+func nfLogCallback(packet nflog.NFLogPacket) {
+
+	// Update the metrics
+	prefix := ""
+	if packet.Prefix != nil {
+		prefix = *packet.Prefix
 	}
 
-	conn, err := net.ListenUDP("udp", udpAddr)
-	if err != nil {
-		log.Fatal().Err(err).Msg("Error listening on UDP address")
-	}
+	PacketTotal.WithLabelValues(prefix).Inc()
+	PacketsByInterface.WithLabelValues(prefix, packet.Indev, packet.Outdev).Inc()
+	PacketSizeHistogram.WithLabelValues(prefix).Observe(float64(packet.PayloadLen))
 
-	log.Info().Str("address", listenAddr).Msg("Listening on UDP address")
+	if packet.Network != nil {
+		PacketsBySrcIP.WithLabelValues(prefix, packet.Network.SrcIp.String()).Inc()
+		PacketsByDestIP.WithLabelValues(prefix, packet.Network.DestIp.String()).Inc()
 
-	// Read from UDP listener in endless loop
-	var buf [65536]byte
-	for {
-		len, _, err := conn.ReadFromUDP(buf[0:])
-		if err != nil {
-			PacketReadErrors.Inc()
-			log.Debug().Err(err).Msg("Error reading from UDP socket")
-			continue
+		if packet.Network.Transport != nil {
+			protoName, serviceName := GetProtoAndService(int32(packet.Network.Transport.DestPort), int32(packet.Network.Protocol))
+
+			PacketByProtocol.WithLabelValues(prefix, protoName).Inc()
+			PacketsByDestPort.WithLabelValues(prefix, serviceName).Inc()
 		}
-
-		// Parse the JSON data
-		var data UlogdMessage
-		err = json.Unmarshal(buf[:len], &data)
-		if err != nil {
-			JsonParseErrors.Inc()
-			continue
-		}
-
-		protoName, serviceName := GetProtoAndService(data.DestPort, data.IpProtocol)
-
-		// Update the metrics
-		PacketTotal.WithLabelValues(data.Prefix).Inc()
-		PacketByProtocol.WithLabelValues(data.Prefix, protoName).Inc()
-		PacketsByInterface.WithLabelValues(data.Prefix, data.OobIn, data.OobOut).Inc()
-		PacketsByDestPort.WithLabelValues(data.Prefix, serviceName).Inc()
-		PacketsBySrcIP.WithLabelValues(data.Prefix, data.SrcIp).Inc()
-		PacketsByDestIP.WithLabelValues(data.Prefix, data.DestIp).Inc()
-		PacketSizeHistogram.WithLabelValues(data.Prefix).Observe(float64(len))
 	}
 }

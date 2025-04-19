@@ -2,19 +2,44 @@ package nflog
 
 /*
 #cgo LDFLAGS: -lnetfilter_log
+
 #include <netdb.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <sys/socket.h>
+#include <errno.h>
 
 #include <libnfnetlink/libnfnetlink.h>
 #include <libnetfilter_log/libnetfilter_log.h>
+
+static int getErrno(void) {
+	return errno;
+}
+
+extern int goCallback(struct nflog_g_handle*, struct nfgenmsg*, struct nflog_data*, void*);
+
 */
 import "C"
 import (
 	"fmt"
-	"time"
+	"net"
 	"unsafe"
+
+	"github.com/rs/zerolog/log"
 )
+
+var nfLogMessageBufferSize = C.size_t(65536)
+
+const PROTOCOL_TCP = 6
+const PROTOCOL_UDP = 17
+const PROTOCOL_ICMP = 1
+const PROTOCOL_ICMPV6 = 58
+const AF_INET = 2
+const AF_INET6 = 10
+
+type NfLogCallback func(packet NFLogPacket)
+
+var userCallback NfLogCallback
 
 type NfLog struct {
 	group       int
@@ -24,25 +49,25 @@ type NfLog struct {
 }
 
 type NFLogPacket struct {
-	Family       uint8
-	Hook         *uint8
-	Protocol     *uint16
-	MAC          []byte
-	MACLen       *uint16
-	MACType      *uint16
-	MACSource    []byte
-	MACSourceLen *uint16
-	Payload      []byte
-	PayloadLen   int
-	Prefix       *string
-	Timestamp    time.Time
-	Mark         uint32
-	Indev        *uint32
-	Outdev       *uint32
-	UID          *uint32
-	GID          *uint32
-	SeqLocal     *uint32
-	SeqGlobal    *uint32
+	Family     uint8
+	Protocol   int32
+	PayloadLen int
+	Prefix     *string
+	Indev      string
+	Outdev     string
+	Network    *NfLogPacketNetwork
+}
+
+type NfLogPacketNetwork struct {
+	SrcIp     net.IP
+	DestIp    net.IP
+	Protocol  int
+	Transport *NFLogTransportPacket
+}
+
+type NFLogTransportPacket struct {
+	SrcPort  int
+	DestPort int
 }
 
 func NewNfLog(group int) *NfLog {
@@ -51,37 +76,59 @@ func NewNfLog(group int) *NfLog {
 	}
 }
 
-func (n *NfLog) Start() error {
+func (n *NfLog) Start(callback NfLogCallback) error {
+	userCallback = callback
+	defer n.close()
+
+	log.Info().Msgf("Starting nfLog on group %d", n.group)
 	n.handle = C.nflog_open()
 	if n.handle == nil {
 		return fmt.Errorf("failed to open nflog handle")
 	}
 
+	log.Info().Msgf("Binding group %d", n.group)
 	n.groupHandle = C.nflog_bind_group(n.handle, C.uint16_t(n.group))
 	if n.groupHandle == nil {
-		defer n.Close()
 		return fmt.Errorf("failed to bind group %d", n.group)
 	}
 
-	// nflog_set_mode(ui->nful_gh, NFULNL_COPY_PACKET, 0xffff);
+	log.Info().Msgf("Setting mode for group %d", n.group)
 	if C.nflog_set_mode(n.groupHandle, C.NFULNL_COPY_PACKET, 0xffff) < 0 {
-		defer n.Close()
 		return fmt.Errorf("failed to set mode for group %d", n.group)
 	}
 
-	// nflog_set_callback(ui->nful_gh, callback, ui);
-	C.nflog_callback_register(n.groupHandle, nil, unsafe.Pointer(n))
+	C.nflog_callback_register(n.groupHandle, (*C.nflog_callback)(C.goCallback), unsafe.Pointer(n))
 
-	n.fd = C.nflog_fd(n.handle)
+	fd := C.nflog_fd(n.handle)
+
+	buf := C.malloc(nfLogMessageBufferSize)
+	if buf == nil {
+		return fmt.Errorf("failed to allocate buffer")
+	}
+	defer C.free(buf)
+
+	for {
+		sz := C.recv(fd, buf, nfLogMessageBufferSize, 0)
+		errno := C.getErrno()
+		if sz < 0 && errno == C.EINTR {
+			continue
+		} else if sz < 0 {
+			break
+		}
+
+		C.nflog_handle_packet(n.handle, (*C.char)(buf), C.int(sz))
+	}
 
 	return nil
 }
 
-// struct nflog_g_handle *gh, struct nfgenmsg *nfmsg, struct nflog_data *nfad, void *data
-func callback(gh *C.struct_nflog_g_handle, nfmsg *C.struct_nfgenmsg, nfad *C.struct_nflog_data, data unsafe.Pointer) {
+//export goCallback
+func goCallback(_ *C.struct_nflog_g_handle, nfmsg *C.struct_nfgenmsg, nfad *C.struct_nflog_data, data unsafe.Pointer) C.int {
 	if nflog := (*NfLog)(data); nflog != nil {
-		nflog.callback(nfmsg, nfad)
+		return C.int(nflog.callback(nfmsg, nfad))
 	}
+
+	return 0
 }
 
 func (n *NfLog) callback(nfmsg *C.struct_nfgenmsg, nfad *C.struct_nflog_data) int {
@@ -90,54 +137,30 @@ func (n *NfLog) callback(nfmsg *C.struct_nfgenmsg, nfad *C.struct_nflog_data) in
 	}
 
 	packet := interpretPacket(nfad, uint8(nfmsg.nfgen_family))
-	if packet == nil {
-		return 0
+	if userCallback != nil {
+		userCallback(packet)
 	}
-
-	fmt.Println(packet.Indev, packet.Outdev)
 
 	return 0
 }
 
-func interpretPacket(ldata *C.struct_nflog_data, pfFamily uint8) *NFLogPacket {
-	packet := &NFLogPacket{
+func interpretPacket(ldata *C.struct_nflog_data, pfFamily uint8) NFLogPacket {
+	packet := NFLogPacket{
 		Family: pfFamily,
 	}
 
 	// Header
 	ph := C.nflog_get_msg_packet_hdr(ldata)
 	if ph != nil {
-		hook := uint8(ph.hook)
 		proto := uint16(C.ntohs(ph.hw_protocol))
-		packet.Hook = &hook
-		packet.Protocol = &proto
-	}
-
-	// Hardware header
-	hwhdrLen := C.nflog_get_msg_packet_hwhdrlen(ldata)
-	if hwhdrLen > 0 {
-		hdrPtr := C.nflog_get_msg_packet_hwhdr(ldata)
-		packet.MAC = C.GoBytes(unsafe.Pointer(hdrPtr), C.int(hwhdrLen))
-		hlen := uint16(hwhdrLen)
-		packet.MACLen = &hlen
-
-		hwtype := uint16(C.nflog_get_hwtype(ldata))
-		packet.MACType = &hwtype
-	}
-
-	// HW address
-	hw := C.nflog_get_packet_hw(ldata)
-	if hw != nil {
-		addrLen := uint16(C.ntohs(hw.hw_addrlen))
-		packet.MACSource = C.GoBytes(unsafe.Pointer(&hw.hw_addr[0]), C.int(addrLen))
-		packet.MACSourceLen = &addrLen
+		packet.Protocol = int32(proto)
 	}
 
 	// Payload
 	var payload *C.char
 	payloadLen := C.nflog_get_payload(ldata, &payload)
 	if payloadLen >= 0 {
-		packet.Payload = C.GoBytes(unsafe.Pointer(payload), payloadLen)
+		packet.Network = interpretNetwork(C.GoBytes(unsafe.Pointer(payload), payloadLen), packet.Family)
 		packet.PayloadLen = int(payloadLen)
 	}
 
@@ -148,53 +171,116 @@ func interpretPacket(ldata *C.struct_nflog_data, pfFamily uint8) *NFLogPacket {
 		packet.Prefix = &prefixStr
 	}
 
-	// Timestamp
-	var ts C.struct_timeval
-	if !(C.nflog_get_timestamp(ldata, &ts) == 0 && ts.tv_sec != 0) {
-		now := time.Now()
-		packet.Timestamp = now
-	} else {
-		packet.Timestamp = time.Unix(int64(ts.tv_sec), int64(ts.tv_usec)*1000)
-	}
-
-	// Mark, interfaces
-	packet.Mark = uint32(C.nflog_get_nfmark(ldata))
-
+	// interfaces
 	indev := uint32(C.nflog_get_indev(ldata))
-	if indev > 0 {
-		packet.Indev = &indev
-	}
+	packet.Indev = getInterfaceName(indev)
 	outdev := uint32(C.nflog_get_outdev(ldata))
-	if outdev > 0 {
-		packet.Outdev = &outdev
-	}
-
-	// UID / GID
-	var uid, gid C.uint32_t
-	if C.nflog_get_uid(ldata, &uid) == 0 {
-		u := uint32(uid)
-		packet.UID = &u
-	}
-	if C.nflog_get_gid(ldata, &gid) == 0 {
-		g := uint32(gid)
-		packet.GID = &g
-	}
-
-	// Sequences
-	var seq C.uint32_t
-	if C.nflog_get_seq(ldata, &seq) == 0 {
-		s := uint32(seq)
-		packet.SeqLocal = &s
-	}
-	if C.nflog_get_seq_global(ldata, &seq) == 0 {
-		sg := uint32(seq)
-		packet.SeqGlobal = &sg
-	}
+	packet.Outdev = getInterfaceName(outdev)
 
 	return packet
 }
 
-func (n *NfLog) Close() error {
+func interpretNetwork(payload []byte, family uint8) *NfLogPacketNetwork {
+	switch family {
+	case AF_INET: // AF_INET
+		return interpretIPv4(payload)
+	case AF_INET6: // AF_INET6
+		return interpretIPv6(payload)
+	default:
+		return nil
+	}
+}
+
+func interpretIPv4(payload []byte) *NfLogPacketNetwork {
+	if len(payload) < 20 {
+		return nil
+	}
+
+	network := &NfLogPacketNetwork{
+		SrcIp:    net.IP(payload[12:16]),
+		DestIp:   net.IP(payload[16:20]),
+		Protocol: int(payload[9]),
+	}
+
+	switch network.Protocol {
+	case PROTOCOL_TCP:
+		network.Transport = interpretTCP(payload[20:])
+	case PROTOCOL_UDP:
+		network.Transport = interpretUDP(payload[20:])
+	}
+
+	return network
+}
+
+func interpretIPv6(payload []byte) *NfLogPacketNetwork {
+	if len(payload) < 40 {
+		return nil
+	}
+	network := &NfLogPacketNetwork{
+		SrcIp:    net.IP(payload[8:24]),
+		DestIp:   net.IP(payload[24:40]),
+		Protocol: int(payload[6]),
+	}
+
+	switch network.Protocol {
+	case PROTOCOL_TCP:
+		network.Transport = interpretTCP(payload[40:])
+	case PROTOCOL_UDP:
+		network.Transport = interpretUDP(payload[40:])
+	}
+
+	return network
+}
+func interpretTCP(payload []byte) *NFLogTransportPacket {
+	if len(payload) < 20 {
+		return nil
+	}
+
+	tcpHeader := payload[:20]
+	srcPort := (int(tcpHeader[0]) << 8) + int(tcpHeader[1])
+	destPort := (int(tcpHeader[2]) << 8) + int(tcpHeader[3])
+
+	return &NFLogTransportPacket{
+		SrcPort:  srcPort,
+		DestPort: destPort,
+	}
+}
+func interpretUDP(payload []byte) *NFLogTransportPacket {
+	if len(payload) < 8 {
+		return nil
+	}
+
+	udpHeader := payload[:8]
+	srcPort := (int(udpHeader[0]) << 8) + int(udpHeader[1])
+	destPort := (int(udpHeader[2]) << 8) + int(udpHeader[3])
+
+	return &NFLogTransportPacket{
+		SrcPort:  srcPort,
+		DestPort: destPort,
+	}
+}
+
+var interfaceCache = make(map[uint32]string)
+
+func getInterfaceName(index uint32) string {
+	if index == 0 {
+		return "unknown"
+	}
+
+	if name, ok := interfaceCache[index]; ok {
+		return name
+	}
+
+	iface, err := net.InterfaceByIndex(int(index))
+	if err != nil {
+		return fmt.Sprintf("unknown-%d", index)
+	}
+
+	interfaceCache[index] = iface.Name
+	return iface.Name
+}
+
+func (n *NfLog) close() error {
 	if n.handle != nil {
 		C.nflog_close(n.handle)
 		n.handle = nil
