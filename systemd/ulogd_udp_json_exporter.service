@@ -5,8 +5,8 @@ After=network.target
 [Service]
 ExecStart=/usr/bin/ulogd_udp_json_exporter --metrics 127.0.0.1:10211 --group 1
 Restart=always
-User=65534
-Group=65534
+User=0
+Group=0
 EnvironmentFile=-/etc/default/server
 
 [Install]

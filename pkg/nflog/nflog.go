@@ -4,6 +4,7 @@ package nflog
 #cgo LDFLAGS: -lnetfilter_log
 
 #include <netdb.h>
+#include <string.h>
 #include <stdlib.h>
 #include <unistd.h>
 #include <sys/socket.h>
@@ -16,11 +17,16 @@ static int getErrno(void) {
 	return errno;
 }
 
+static char* getStrerror(int err) {
+	return strerror(err);
+}
+
 extern int goCallback(struct nflog_g_handle*, struct nfgenmsg*, struct nflog_data*, void*);
 
 */
 import "C"
 import (
+	"errors"
 	"fmt"
 	"net"
 	"unsafe"
@@ -39,13 +45,12 @@ const AF_INET6 = 10
 
 type NfLogCallback func(packet NFLogPacket)
 
-var userCallback NfLogCallback
-
 type NfLog struct {
 	group       int
 	handle      *C.struct_nflog_handle
 	groupHandle *C.struct_nflog_g_handle
 	fd          C.int
+	callbackId  uint32
 }
 
 type NFLogPacket struct {
@@ -77,24 +82,25 @@ func NewNfLog(group int) *NfLog {
 }
 
 func (n *NfLog) Start(callback NfLogCallback) error {
-	userCallback = callback
+	n.callbackId = registerUserCallback(callback)
+
 	defer n.close()
 
 	log.Info().Msgf("Starting nfLog on group %d", n.group)
 	n.handle = C.nflog_open()
 	if n.handle == nil {
-		return fmt.Errorf("failed to open nflog handle")
+		return errors.Join(getErrnoError(), fmt.Errorf("failed to open nfLog"))
 	}
 
 	log.Info().Msgf("Binding group %d", n.group)
 	n.groupHandle = C.nflog_bind_group(n.handle, C.uint16_t(n.group))
 	if n.groupHandle == nil {
-		return fmt.Errorf("failed to bind group %d", n.group)
+		return errors.Join(getErrnoError(), fmt.Errorf("failed to bind group %d", n.group))
 	}
 
 	log.Info().Msgf("Setting mode for group %d", n.group)
 	if C.nflog_set_mode(n.groupHandle, C.NFULNL_COPY_PACKET, 0xffff) < 0 {
-		return fmt.Errorf("failed to set mode for group %d", n.group)
+		return errors.Join(getErrnoError(), fmt.Errorf("failed to set mode for group %d", n.group))
 	}
 
 	C.nflog_callback_register(n.groupHandle, (*C.nflog_callback)(C.goCallback), unsafe.Pointer(n))
@@ -103,7 +109,7 @@ func (n *NfLog) Start(callback NfLogCallback) error {
 
 	buf := C.malloc(nfLogMessageBufferSize)
 	if buf == nil {
-		return fmt.Errorf("failed to allocate buffer")
+		return errors.Join(getErrnoError(), fmt.Errorf("failed to allocate buffer"))
 	}
 	defer C.free(buf)
 
@@ -137,9 +143,7 @@ func (n *NfLog) callback(nfmsg *C.struct_nfgenmsg, nfad *C.struct_nflog_data) in
 	}
 
 	packet := interpretPacket(nfad, uint8(nfmsg.nfgen_family))
-	if userCallback != nil {
-		userCallback(packet)
-	}
+	callCallback(n.callbackId, packet)
 
 	return 0
 }
@@ -278,6 +282,15 @@ func getInterfaceName(index uint32) string {
 
 	interfaceCache[index] = iface.Name
 	return iface.Name
+}
+
+func getErrnoError() error {
+	errno := C.getErrno()
+	if errno != 0 {
+		strconvErr := C.GoString(C.getStrerror(errno))
+		return fmt.Errorf("errno %d: %s", errno, strconvErr)
+	}
+	return fmt.Errorf("unknown error")
 }
 
 func (n *NfLog) close() error {
