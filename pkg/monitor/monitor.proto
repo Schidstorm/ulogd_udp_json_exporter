@@ -1,0 +1,48 @@
+syntax = "proto3";
+
+option go_package = "github.com/schidstorm/ulogd_monitor/pkg/monitor";
+
+package monitor;
+
+// The greeting service definition.
+service Monitor {
+  // Sends a greeting
+  rpc SendPacket (SendPacketRequest) returns (SendPacketResponse) {}
+}
+
+message SendPacketRequest {
+    // The request message containing the user's name.
+    NFLogPacket packet = 1;
+    PacketMetadata metadata = 2;
+}
+
+message PacketMetadata {
+    string hostname = 1;
+}
+
+// The request message containing the user's name.
+message NFLogPacket {
+    uint32 family = 1;
+    int32 protocol = 2;
+    int32 payload_len = 3;
+    string prefix = 4;
+    string indev = 5;
+    string outdev = 6;
+    NFLogPacket_Network network = 7;
+}
+
+message NFLogPacket_Network {
+    bytes src_ip = 1;
+    bytes dest_ip = 2;
+    int32 protocol = 3;
+    NFLogPacket_Network_Transport transport = 4;
+}
+
+message NFLogPacket_Network_Transport {
+    int32 src_port = 1;
+    int32 dest_port = 2;
+}
+
+message SendPacketResponse {
+    
+}

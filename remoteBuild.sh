@@ -33,6 +33,9 @@ loc() {
     echo "copy to remote"
     rsync -e "ssh -p $port" -avz --delete --exclude=.git --exclude=README.md "--exclude=${projectName}_*" . $user@$host:$projectName
 
+    echo "cleanup binaries"
+    ssh -p $port $user@$host 'cd '"$projectName"' && rm -f '"${projectName}_*"
+
     echo "build on remote"
     ssh -p $port $user@$host 'cd '"$projectName"' && bash remoteBuild.sh remote'
 
