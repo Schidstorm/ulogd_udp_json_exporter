@@ -1,17 +1,23 @@
 package nflog
 
-import "sync"
+import (
+	"sync"
+
+	"github.com/schidstorm/ulogd_monitor/pkg/pb"
+)
+
+type CallbackFunc func(packet *pb.Packet)
 
 type UserCallback struct {
 	id       uint32
-	callback NfLogCallback
+	callback CallbackFunc
 }
 
 var userCallbacks []UserCallback
 var mutex sync.Mutex
 var id uint32
 
-func registerUserCallback(callback NfLogCallback) uint32 {
+func registerUserCallback(callback CallbackFunc) uint32 {
 	mutex.Lock()
 	defer mutex.Unlock()
 
@@ -20,7 +26,7 @@ func registerUserCallback(callback NfLogCallback) uint32 {
 	return id
 }
 
-func callCallback(id uint32, packet NFLogPacket) {
+func callCallback(id uint32, packet *pb.Packet) {
 	mutex.Lock()
 	defer mutex.Unlock()
 

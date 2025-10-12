@@ -16,9 +16,12 @@ build_arm64:
 
 build_arch: test
 	sudo apt-get install -y libnetfilter-log-dev && \
-	CGO_ENABLED=1 /usr/local/go/bin/go build -a -o ulogd_monitor_$(arch) ./cmd/monitor
+	CGO_ENABLED=1 /usr/local/go/bin/go build -v -a -o ulogd_monitor_$(arch) ./cmd/monitor
 	
 proto:
 	find -type f -name '*.proto' | xargs -L1 protoc --go_out=. --go_opt=paths=source_relative \
 		--go-grpc_out=. --go-grpc_opt=paths=source_relative \
-		./pkg/monitor/monitor.proto
+		./pkg/pb/monitor.proto
+
+dev:
+	/usr/local/go/bin/go run -v ./cmd/monitor server -d -l trace

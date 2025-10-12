@@ -14,70 +14,55 @@ body {
     gap: 0.5rem;
 }
 
-.packet-item {
-    flex-basis: 3rem;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+.packet.accept {
+    border-left: 0.5rem solid #00ff37;
+    padding-left: 0.5rem;
 }
 
-.packet-item.Hostname {
-    order: 1;
-}
-.packet-item.Family {
-    order: 2;
-}
-.packet-item.Protocol {
-    order: 3;
-}
-.packet-item.PayloadLen {
-    order: 4;
-}
-.packet-item.Outdev {
-    order: 5;
-}
-.packet-item.Indev {
-    order: 6;
-}
-.packet-item.Network {
-    order: 7;
+.packet.drop {
+    border-left: 0.5rem solid #c30000;
+    padding-left: 0.5rem;
 }
 
-.packet-item:first {
-    margin-top: 1rem;
-}
-
-.packet-item.Hostname {
-    flex-basis: 6rem;
-    font-weight: bold;
-}
-
-.packet-item.Network {
-    flex: 1 1 auto;
+.direction {
+    font-family: monospace;
     font-size: 0.9rem;
-    opacity: 0.8;
+    display: inline-block;
 }
 
-.packet-item.PayloadLen {
-    flex-basis: 4rem;
-    overflow: visible;
+.direction.left {
+    text-align: right;
 }
 
-.packet-item.Prefix {
-    display: none;
+.direction.right {
+    text-align: left;
 }
 
-.packet-item.Outdev {
-    display: flex;
-    justify-content: end;
+.direction.arrow {
+    font-size: 1.5rem;
+    color: #888;
+    line-height: 1rem;
 }
-.packet-item.Indev::before {
-    content: "→";
-    margin-right: 0.5rem;
+
+.labels {
+    display: inline-flex;
+    gap: 0.3rem;
+    width: 11rem;
 }
-.packet-item.Indev {
-    flex-basis: 4.5rem;
+
+.label {
+    background-color: #4a4a4a;
+    padding: 0;
+    padding-left: 0.5rem;
+    padding-right: 0.5rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: 1.2rem;
+    border-radius: 0.3rem;
+    font-size: 0.6rem;
 }
+
 
 /* Hide less important fields on small screens */
 @media (max-width: 800px) {

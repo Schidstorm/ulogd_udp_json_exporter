@@ -4,7 +4,7 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
-	"github.com/schidstorm/ulogd_monitor/pkg/nflog"
+	"github.com/schidstorm/ulogd_monitor/pkg/pb"
 )
 
 func runNflogMock(packetQueue PacketQueue) {
@@ -12,29 +12,43 @@ func runNflogMock(packetQueue PacketQueue) {
 
 	var counter uint
 	for {
-		packet := nflog.NFLogPacket{
-			Family:     2,
-			Protocol:   6,
-			PayloadLen: 100,
-			Prefix:     nil,
-			Indev:      "eth0",
-			Outdev:     "eth1",
-			Network: &nflog.NfLogPacketNetwork{
-				SrcIp:    []byte{192, 168, 1, 1},
-				DestIp:   []byte{192, 168, 1, 2},
-				Protocol: 6,
-				Transport: &nflog.NFLogTransportPacket{
-					SrcPort:  80,
-					DestPort: int(counter % 65535),
+		p := &pb.Packet{
+			Metadata: &pb.PacketMetadata{
+				Timestamp: uint64(time.Now().Unix()),
+				Hostname:  "mocked-host",
+			},
+			Layers: []*pb.Layer{
+				{
+					Layer: &pb.Layer_Ethernet{
+						Ethernet: &pb.LayerEthernet{
+							SrcMac:    "00:11:22:33:44:55",
+							DestMac:   "66:77:88:99:AA:BB",
+							Ethertype: "IPv4",
+						},
+					},
+				},
+				{
+					Layer: &pb.Layer_Ipv4{
+						Ipv4: &pb.LayerIPv4{
+							SrcIp:    "192.168.1.1",
+							DestIp:   "192.168.1.2",
+							Protocol: "TCP",
+						},
+					},
+				},
+				{
+					Layer: &pb.Layer_Tcp{
+						Tcp: &pb.LayerTCP{
+							SrcPort:  80,
+							DestPort: uint32(counter % 65535),
+						},
+					},
 				},
 			},
 		}
 
 		counter++
-		packetQueue.Enqueue(Packet{
-			NflogPacket: packet,
-			Hostname:    "localhost",
-		})
+		packetQueue.Enqueue(p)
 
 		time.Sleep(1 * time.Second)
 	}

@@ -2,9 +2,9 @@
 // versions:
 // - protoc-gen-go-grpc v1.5.1
 // - protoc             v3.21.12
-// source: pkg/monitor/monitor.proto
+// source: pkg/pb/monitor.proto
 
-package monitor
+package pb
 
 import (
 	context "context"
@@ -19,17 +19,14 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	Monitor_SendPacket_FullMethodName = "/monitor.Monitor/SendPacket"
+	Monitor_StreamPackets_FullMethodName = "/pb.Monitor/StreamPackets"
 )
 
 // MonitorClient is the client API for Monitor service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
-//
-// The greeting service definition.
 type MonitorClient interface {
-	// Sends a greeting
-	SendPacket(ctx context.Context, in *SendPacketRequest, opts ...grpc.CallOption) (*SendPacketResponse, error)
+	StreamPackets(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[StreamPacketsRequest, StreamPacketsResponse], error)
 }
 
 type monitorClient struct {
@@ -40,24 +37,24 @@ func NewMonitorClient(cc grpc.ClientConnInterface) MonitorClient {
 	return &monitorClient{cc}
 }
 
-func (c *monitorClient) SendPacket(ctx context.Context, in *SendPacketRequest, opts ...grpc.CallOption) (*SendPacketResponse, error) {
+func (c *monitorClient) StreamPackets(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[StreamPacketsRequest, StreamPacketsResponse], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(SendPacketResponse)
-	err := c.cc.Invoke(ctx, Monitor_SendPacket_FullMethodName, in, out, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &Monitor_ServiceDesc.Streams[0], Monitor_StreamPackets_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
-	return out, nil
+	x := &grpc.GenericClientStream[StreamPacketsRequest, StreamPacketsResponse]{ClientStream: stream}
+	return x, nil
 }
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type Monitor_StreamPacketsClient = grpc.BidiStreamingClient[StreamPacketsRequest, StreamPacketsResponse]
 
 // MonitorServer is the server API for Monitor service.
 // All implementations must embed UnimplementedMonitorServer
 // for forward compatibility.
-//
-// The greeting service definition.
 type MonitorServer interface {
-	// Sends a greeting
-	SendPacket(context.Context, *SendPacketRequest) (*SendPacketResponse, error)
+	StreamPackets(grpc.BidiStreamingServer[StreamPacketsRequest, StreamPacketsResponse]) error
 	mustEmbedUnimplementedMonitorServer()
 }
 
@@ -68,8 +65,8 @@ type MonitorServer interface {
 // pointer dereference when methods are called.
 type UnimplementedMonitorServer struct{}
 
-func (UnimplementedMonitorServer) SendPacket(context.Context, *SendPacketRequest) (*SendPacketResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method SendPacket not implemented")
+func (UnimplementedMonitorServer) StreamPackets(grpc.BidiStreamingServer[StreamPacketsRequest, StreamPacketsResponse]) error {
+	return status.Errorf(codes.Unimplemented, "method StreamPackets not implemented")
 }
 func (UnimplementedMonitorServer) mustEmbedUnimplementedMonitorServer() {}
 func (UnimplementedMonitorServer) testEmbeddedByValue()                 {}
@@ -92,36 +89,27 @@ func RegisterMonitorServer(s grpc.ServiceRegistrar, srv MonitorServer) {
 	s.RegisterService(&Monitor_ServiceDesc, srv)
 }
 
-func _Monitor_SendPacket_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(SendPacketRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(MonitorServer).SendPacket(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: Monitor_SendPacket_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(MonitorServer).SendPacket(ctx, req.(*SendPacketRequest))
-	}
-	return interceptor(ctx, in, info, handler)
+func _Monitor_StreamPackets_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(MonitorServer).StreamPackets(&grpc.GenericServerStream[StreamPacketsRequest, StreamPacketsResponse]{ServerStream: stream})
 }
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type Monitor_StreamPacketsServer = grpc.BidiStreamingServer[StreamPacketsRequest, StreamPacketsResponse]
 
 // Monitor_ServiceDesc is the grpc.ServiceDesc for Monitor service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
 var Monitor_ServiceDesc = grpc.ServiceDesc{
-	ServiceName: "monitor.Monitor",
+	ServiceName: "pb.Monitor",
 	HandlerType: (*MonitorServer)(nil),
-	Methods: []grpc.MethodDesc{
+	Methods:     []grpc.MethodDesc{},
+	Streams: []grpc.StreamDesc{
 		{
-			MethodName: "SendPacket",
-			Handler:    _Monitor_SendPacket_Handler,
+			StreamName:    "StreamPackets",
+			Handler:       _Monitor_StreamPackets_Handler,
+			ServerStreams: true,
+			ClientStreams: true,
 		},
 	},
-	Streams:  []grpc.StreamDesc{},
-	Metadata: "pkg/monitor/monitor.proto",
+	Metadata: "pkg/pb/monitor.proto",
 }

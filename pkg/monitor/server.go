@@ -1,17 +1,31 @@
 package monitor
 
 import (
+	"crypto/rand"
 	"encoding/json"
 	"io/fs"
+	"math/big"
 	"net/http"
+	"sync/atomic"
+	"time"
 
 	"github.com/rs/zerolog/log"
 
 	"embed"
 
 	"github.com/gorilla/websocket"
-	"github.com/schidstorm/ulogd_monitor/pkg/nflog"
 )
+
+var mockPackets = []string{
+	`{"metadata":{"hostname":"scan","capture_length":60,"length":60,"prefix":"reject"},"layers":[{"Layer":{"Ethernet":{"ethertype":"IPv4"}}},{"Layer":{"Ipv4":{"src_ip":"192.168.1.65","dest_ip":"34.96.126.106","protocol":"TCP","ttl":64}}},{"Layer":{"Tcp":{"src_port":33132,"dest_port":443,"seq":65944144,"data_offset":10,"window":64240,"checksum":25314}}}]}`,
+	`{"metadata":{"hostname":"scan","capture_length":66,"length":66,"prefix":"accept"},"layers":[{"Layer":{"Ethernet":{"ethertype":"IPv4"}}},{"Layer":{"Ipv4":{"src_ip":"192.168.1.65","dest_ip":"192.168.1.155","protocol":"UDP","ttl":64}}},{"Layer":{"Udp":{"src_port":37092,"dest_port":53,"length":46,"checksum":33900}}}]}`,
+	`{"metadata":{"hostname":"scan","capture_length":655,"length":655,"prefix":"reject"},"layers":[{"Layer":{"Ethernet":{"ethertype":"IPv6"}}},{"Layer":{"Ipv6":{"src_ip":"fe80::24f1:caac:a217:c23d","dest_ip":"ff02::c","next_header":"UDP","hop_limit":1}}},{"Layer":{"Udp":{"src_port":51072,"dest_port":3702,"length":615,"checksum":21499}}}]}`,
+	`{"metadata":{"hostname":"scan","capture_length":64,"length":64,"prefix":"reject"},"layers":[{"Layer":{"Ethernet":{"ethertype":"IPv6"}}},{"Layer":{"Ipv6":{"src_ip":"fe80::c093:bcff:fe40:96dc","dest_ip":"ff02::1","next_header":"UDP","hop_limit":1}}},{"Layer":{"Udp":{"src_port":8612,"dest_port":8612,"length":24,"checksum":4191}}}]}`,
+	`{"metadata":{"hostname":"scan","capture_length":44,"length":44,"prefix":"accept"},"layers":[{"Layer":{"Ethernet":{"ethertype":"IPv4"}}},{"Layer":{"Ipv4":{"src_ip":"10.88.0.1","dest_ip":"10.88.255.255","protocol":"UDP","ttl":64}}},{"Layer":{"Udp":{"src_port":8612,"dest_port":8610,"length":24,"checksum":5338}}}]}`,
+	`{"metadata":{"hostname":"scan","capture_length":76,"length":76,"prefix":"reject"},"layers":[{"Layer":{"Ethernet":{"ethertype":"IPv6"}}},{"Layer":{"Ipv6":{"src_ip":"fe80::68df:f9ff:fe83:b152","dest_ip":"ff02::16","next_header":"IPv6HopByHop","hop_limit":1}}},{"Layer":{"Icmpv6":{"typeCode":"143(0)","checksum":24137}}}]}`,
+	`{"metadata":{"hostname":"scan","capture_length":60,"length":60,"prefix":"accept"},"layers":[{"Layer":{"Ethernet":{"ethertype":"IPv4"}}},{"Layer":{"Ipv4":{"src_ip":"192.168.1.65","dest_ip":"192.168.1.155","protocol":"TCP","ttl":64}}},{"Layer":{"Tcp":{"src_port":41128,"dest_port":5000,"seq":3429858000,"data_offset":10,"window":64240,"checksum":33883}}}]}`,
+	`{"metadata":{"hostname":"wlan","capture_length":2852,"length":2852,"prefix":"reject"},"layers":[{"Layer":{"Ethernet":{"ethertype":"IPv4"}}},{"Layer":{"Ipv4":{"src_ip":"192.168.1.9","dest_ip":"34.96.126.106","protocol":"TCP","ttl":64}}},{"Layer":{"Tcp":{"src_port":54590,"dest_port":443,"seq":2481316014,"ack":2194214556,"data_offset":8,"window":590,"checksum":28050}}}]}`,
+}
 
 var upgrader = websocket.Upgrader{}
 
@@ -27,14 +41,12 @@ var jsFiles embed.FS
 var cssFiles embed.FS
 
 type Server struct {
-	PacketQueue PacketQueue
-	readMany    *QueueReadMany
-	mux         *http.ServeMux
-}
-
-type Packet struct {
-	NflogPacket nflog.NFLogPacket
-	Hostname    string
+	PacketQueue      PacketQueue
+	readMany         *QueueReadMany
+	mux              *http.ServeMux
+	isDev            bool
+	websocketCounter atomic.Int64
+	agentReceiver    *AgentReceiver
 }
 
 type ServerConfig struct {
@@ -70,16 +82,17 @@ func (s *Server) Start(cfg ServerConfig) error {
 		}
 	}()
 
-	go func() {
-		if cfg.IsDev {
-			runNflogMock(s.PacketQueue)
-		} else {
-			err := RunAgentReceiver(cfg.GrpcListenAddr, s.PacketQueue)
+	if cfg.IsDev {
+		s.isDev = true
+	} else {
+		s.agentReceiver = NewAgentReceiver(s.PacketQueue)
+		go func() {
+			err := s.agentReceiver.Serve(cfg.GrpcListenAddr)
 			if err != nil {
 				log.Fatal().Err(err).Msg("Failed to start agent receiver")
 			}
-		}
-	}()
+		}()
+	}
 
 	srv := &http.Server{
 		Addr:    cfg.HttpListenAddr,
@@ -100,15 +113,29 @@ func (s *Server) packets(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer c.Close()
+	s.incrementWebsocketCounter()
 	readQueue, id := s.readMany.Attach()
 	defer s.readMany.Detach(id)
+	defer s.decrementWebsocketCounter()
 
 	for {
-		packet := readQueue.Dequeue()
-		message, err := json.Marshal(&packet)
-		if err != nil {
-			log.Err(err).Msg("json marshal")
-			break
+		var message []byte
+
+		if s.isDev {
+			randomIndex, err := rand.Int(rand.Reader, big.NewInt(int64(len(mockPackets))))
+			if err != nil {
+				log.Err(err).Msg("rand int")
+				break
+			}
+			message = []byte(mockPackets[randomIndex.Int64()])
+			time.Sleep(500 * time.Millisecond)
+		} else {
+			packet := readQueue.Dequeue()
+			message, err = json.Marshal(&packet)
+			if err != nil {
+				log.Err(err).Msg("json marshal")
+				break
+			}
 		}
 
 		err = c.WriteMessage(websocket.BinaryMessage, message)
@@ -116,6 +143,24 @@ func (s *Server) packets(w http.ResponseWriter, r *http.Request) {
 			log.Info().Err(err).Msg("failed to write to websocket")
 			break
 		}
+	}
+}
+
+func (s *Server) incrementWebsocketCounter() {
+	if s.websocketCounter.Add(1) == 1 {
+		if s.agentReceiver != nil {
+			s.agentReceiver.SetActive(true)
+		}
+		log.Info().Msg("First websocket connected, activating agent")
+	}
+}
+
+func (s *Server) decrementWebsocketCounter() {
+	if s.websocketCounter.Add(-1) == 0 {
+		if s.agentReceiver != nil {
+			s.agentReceiver.SetActive(false)
+		}
+		log.Info().Msg("Last websocket disconnected, deactivating agent")
 	}
 }
 

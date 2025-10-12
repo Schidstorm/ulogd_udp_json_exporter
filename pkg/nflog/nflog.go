@@ -9,6 +9,7 @@ package nflog
 #include <unistd.h>
 #include <sys/socket.h>
 #include <errno.h>
+#include <linux/netfilter.h>
 
 #include <libnfnetlink/libnfnetlink.h>
 #include <libnetfilter_log/libnetfilter_log.h>
@@ -31,7 +32,10 @@ import (
 	"net"
 	"unsafe"
 
+	"github.com/google/gopacket"
+	"github.com/google/gopacket/layers"
 	"github.com/rs/zerolog/log"
+	"github.com/schidstorm/ulogd_monitor/pkg/pb"
 )
 
 var nfLogMessageBufferSize = C.size_t(65536)
@@ -43,8 +47,6 @@ const PROTOCOL_ICMPV6 = 58
 const AF_INET = 2
 const AF_INET6 = 10
 
-type NfLogCallback func(packet NFLogPacket)
-
 type NfLog struct {
 	group       int
 	handle      *C.struct_nflog_handle
@@ -53,35 +55,13 @@ type NfLog struct {
 	callbackId  uint32
 }
 
-type NFLogPacket struct {
-	Family     uint8
-	Protocol   int32
-	PayloadLen int
-	Prefix     *string
-	Indev      string
-	Outdev     string
-	Network    *NfLogPacketNetwork
-}
-
-type NfLogPacketNetwork struct {
-	SrcIp     net.IP
-	DestIp    net.IP
-	Protocol  int
-	Transport *NFLogTransportPacket
-}
-
-type NFLogTransportPacket struct {
-	SrcPort  int
-	DestPort int
-}
-
 func NewNfLog(group int) *NfLog {
 	return &NfLog{
 		group: group,
 	}
 }
 
-func (n *NfLog) Start(callback NfLogCallback) error {
+func (n *NfLog) Start(callback CallbackFunc) error {
 	n.callbackId = registerUserCallback(callback)
 
 	defer n.close()
@@ -148,120 +128,187 @@ func (n *NfLog) callback(nfmsg *C.struct_nfgenmsg, nfad *C.struct_nflog_data) in
 	return 0
 }
 
-func interpretPacket(ldata *C.struct_nflog_data, pfFamily uint8) NFLogPacket {
-	packet := NFLogPacket{
-		Family: pfFamily,
+func interpretPacket(ldata *C.struct_nflog_data, pfFamily uint8) *pb.Packet {
+	packet := pb.Packet{
+		Metadata: &pb.PacketMetadata{},
+		Layers:   []*pb.Layer{},
 	}
 
 	// Header
 	ph := C.nflog_get_msg_packet_hdr(ldata)
 	if ph != nil {
 		proto := uint16(C.ntohs(ph.hw_protocol))
-		packet.Protocol = int32(proto)
+		gopacketProto := layers.EthernetType(proto)
+		packet.Layers = append(packet.Layers, &pb.Layer{
+			Layer: &pb.Layer_Ethernet{
+				Ethernet: &pb.LayerEthernet{
+					Ethertype: gopacketProto.String(),
+				},
+			},
+		})
+
+		var hook string
+		switch ph.hook {
+		case C.NF_INET_PRE_ROUTING:
+			hook = "prerouting"
+		case C.NF_INET_LOCAL_IN:
+			hook = "input"
+		case C.NF_INET_FORWARD:
+			hook = "forward"
+		case C.NF_INET_LOCAL_OUT:
+			hook = "output"
+		case C.NF_INET_POST_ROUTING:
+			hook = "postrouting"
+		default:
+			hook = ""
+		}
+		packet.Metadata.Hook = hook
 	}
 
 	// Payload
 	var payload *C.char
 	payloadLen := C.nflog_get_payload(ldata, &payload)
 	if payloadLen >= 0 {
-		packet.Network = interpretNetwork(C.GoBytes(unsafe.Pointer(payload), payloadLen), packet.Family)
-		packet.PayloadLen = int(payloadLen)
+		packet.Metadata.CaptureLength = uint32(payloadLen)
+		packet.Metadata.Length = uint32(payloadLen)
+		packetLayers, err := interpretNetwork(C.GoBytes(unsafe.Pointer(payload), payloadLen), pfFamily)
+		if err != nil {
+			log.Info().Err(err).Msg("failed to interpret network layer")
+		} else {
+			packet.Layers = append(packet.Layers, packetLayers...)
+		}
 	}
 
 	// Prefix
 	prefix := C.nflog_get_prefix(ldata)
 	if prefix != nil {
 		prefixStr := C.GoString(prefix)
-		packet.Prefix = &prefixStr
+		packet.Metadata.Prefix = prefixStr
 	}
 
-	// interfaces
-	indev := uint32(C.nflog_get_indev(ldata))
-	packet.Indev = getInterfaceName(indev)
-	outdev := uint32(C.nflog_get_outdev(ldata))
-	packet.Outdev = getInterfaceName(outdev)
+	// // interfaces
+	// indev := uint32(C.nflog_get_indev(ldata))
+	// packet.Metadata.InterfaceName = getInterfaceName(indev)
+	// outdev := uint32(C.nflog_get_outdev(ldata))
+	// packet.Outdev = getInterfaceName(outdev)
 
-	return packet
+	return &packet
 }
 
-func interpretNetwork(payload []byte, family uint8) *NfLogPacketNetwork {
+func interpretNetwork(payload []byte, family uint8) ([]*pb.Layer, error) {
 	switch family {
 	case AF_INET: // AF_INET
 		return interpretIPv4(payload)
 	case AF_INET6: // AF_INET6
 		return interpretIPv6(payload)
 	default:
-		return nil
+		return nil, fmt.Errorf("unknown protocol family: %d", family)
 	}
 }
 
-func interpretIPv4(payload []byte) *NfLogPacketNetwork {
-	if len(payload) < 20 {
-		return nil
+func interpretIPv4(payload []byte) ([]*pb.Layer, error) {
+	packet := gopacket.NewPacket(payload, layers.LayerTypeIPv4, gopacket.Default)
+	if err := packet.ErrorLayer(); err != nil {
+		return nil, err.Error()
 	}
 
-	network := &NfLogPacketNetwork{
-		SrcIp:    net.IP(payload[12:16]),
-		DestIp:   net.IP(payload[16:20]),
-		Protocol: int(payload[9]),
-	}
-
-	switch network.Protocol {
-	case PROTOCOL_TCP:
-		network.Transport = interpretTCP(payload[20:])
-	case PROTOCOL_UDP:
-		network.Transport = interpretUDP(payload[20:])
-	}
-
-	return network
+	return gopacketTolayers(packet), nil
 }
 
-func interpretIPv6(payload []byte) *NfLogPacketNetwork {
-	if len(payload) < 40 {
-		return nil
-	}
-	network := &NfLogPacketNetwork{
-		SrcIp:    net.IP(payload[8:24]),
-		DestIp:   net.IP(payload[24:40]),
-		Protocol: int(payload[6]),
+func interpretIPv6(payload []byte) ([]*pb.Layer, error) {
+	packet := gopacket.NewPacket(payload, layers.LayerTypeIPv6, gopacket.Default)
+	packet.Metadata()
+	if err := packet.ErrorLayer(); err != nil {
+		return nil, err.Error()
 	}
 
-	switch network.Protocol {
-	case PROTOCOL_TCP:
-		network.Transport = interpretTCP(payload[40:])
-	case PROTOCOL_UDP:
-		network.Transport = interpretUDP(payload[40:])
-	}
-
-	return network
+	return gopacketTolayers(packet), nil
 }
-func interpretTCP(payload []byte) *NFLogTransportPacket {
-	if len(payload) < 20 {
-		return nil
-	}
 
-	tcpHeader := payload[:20]
-	srcPort := (int(tcpHeader[0]) << 8) + int(tcpHeader[1])
-	destPort := (int(tcpHeader[2]) << 8) + int(tcpHeader[3])
-
-	return &NFLogTransportPacket{
-		SrcPort:  srcPort,
-		DestPort: destPort,
+func gopacketTolayers(packet gopacket.Packet) []*pb.Layer {
+	var layersList []*pb.Layer
+	for _, layer := range packet.Layers() {
+		switch l := layer.(type) {
+		case *layers.Ethernet:
+			layersList = append(layersList, &pb.Layer{
+				Layer: &pb.Layer_Ethernet{
+					Ethernet: &pb.LayerEthernet{
+						SrcMac:    l.SrcMAC.String(),
+						DestMac:   l.DstMAC.String(),
+						Ethertype: l.EthernetType.String(),
+					},
+				},
+			})
+		case *layers.IPv4:
+			layersList = append(layersList, &pb.Layer{
+				Layer: &pb.Layer_Ipv4{
+					Ipv4: &pb.LayerIPv4{
+						SrcIp:    l.SrcIP.String(),
+						DestIp:   l.DstIP.String(),
+						Protocol: l.Protocol.String(),
+						Ttl:      uint32(l.TTL),
+					},
+				},
+			})
+		case *layers.IPv6:
+			layersList = append(layersList, &pb.Layer{
+				Layer: &pb.Layer_Ipv6{
+					Ipv6: &pb.LayerIPv6{
+						SrcIp:      l.SrcIP.String(),
+						DestIp:     l.DstIP.String(),
+						NextHeader: l.NextHeader.String(),
+						HopLimit:   uint32(l.HopLimit),
+					},
+				},
+			})
+		case *layers.TCP:
+			layersList = append(layersList, &pb.Layer{
+				Layer: &pb.Layer_Tcp{
+					Tcp: &pb.LayerTCP{
+						SrcPort:       uint32(l.SrcPort),
+						DestPort:      uint32(l.DstPort),
+						Seq:           l.Seq,
+						Ack:           l.Ack,
+						DataOffset:    uint32(l.DataOffset),
+						Window:        uint32(l.Window),
+						Checksum:      uint32(l.Checksum),
+						UrgentPointer: uint32(l.Urgent),
+					},
+				},
+			})
+		case *layers.UDP:
+			layersList = append(layersList, &pb.Layer{
+				Layer: &pb.Layer_Udp{
+					Udp: &pb.LayerUDP{
+						SrcPort:  uint32(l.SrcPort),
+						DestPort: uint32(l.DstPort),
+						Length:   uint32(l.Length),
+						Checksum: uint32(l.Checksum),
+					},
+				},
+			})
+		case *layers.ICMPv4:
+			layersList = append(layersList, &pb.Layer{
+				Layer: &pb.Layer_Icmpv4{
+					Icmpv4: &pb.LayerICMPV4{
+						TypeCode: l.TypeCode.String(),
+						Id:       uint32(l.Id),
+						Seq:      uint32(l.Seq),
+					},
+				},
+			})
+		case *layers.ICMPv6:
+			layersList = append(layersList, &pb.Layer{
+				Layer: &pb.Layer_Icmpv6{
+					Icmpv6: &pb.LayerICMPV6{
+						TypeCode: l.TypeCode.String(),
+						Checksum: uint32(l.Checksum),
+					},
+				},
+			})
+		}
 	}
-}
-func interpretUDP(payload []byte) *NFLogTransportPacket {
-	if len(payload) < 8 {
-		return nil
-	}
-
-	udpHeader := payload[:8]
-	srcPort := (int(udpHeader[0]) << 8) + int(udpHeader[1])
-	destPort := (int(udpHeader[2]) << 8) + int(udpHeader[3])
-
-	return &NFLogTransportPacket{
-		SrcPort:  srcPort,
-		DestPort: destPort,
-	}
+	return layersList
 }
 
 var interfaceCache = make(map[uint32]string)

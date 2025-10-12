@@ -1,0 +1,101 @@
+syntax = "proto3";
+
+option go_package = "github.com/schidstorm/ulogd_monitor/pkg/pb";
+
+package pb;
+
+service Monitor {
+  rpc StreamPackets (stream StreamPacketsRequest) returns (stream StreamPacketsResponse) {}
+}
+
+message StreamPacketsRequest {
+    repeated Packet packets = 1;
+}
+
+message Packet {
+    PacketMetadata metadata = 1;
+    repeated Layer layers = 2;
+}
+
+message PacketMetadata {
+    string hostname = 1;
+    uint64 timestamp = 2;
+    uint32 capture_length = 3;
+    uint32 length = 4;
+    string interface_name = 5;
+    string prefix = 6;
+    string hook = 7;
+}
+
+message Layer {
+    oneof layer {
+        LayerEthernet ethernet = 2;
+        LayerIPv4 ipv4 = 3;
+        LayerIPv6 ipv6 = 4;
+        LayerTCP tcp = 5;
+        LayerUDP udp = 6;
+        LayerICMPV4 icmpv4 = 7;
+        LayerICMPV6 icmpv6 = 8;
+    }
+}
+
+message LayerEthernet {
+    string src_mac = 1;
+    string dest_mac = 2;
+    string ethertype = 3;
+}
+
+message LayerIPv4 {
+    string src_ip = 1;
+    string dest_ip = 2;
+    string protocol = 3;
+    uint32 ttl = 4;
+}
+
+message LayerIPv6 {
+    string src_ip = 1;
+    string dest_ip = 2;
+    string next_header = 3;
+    uint32 hop_limit = 4;
+}
+
+message LayerTCP {
+    uint32 src_port = 1;
+    uint32 dest_port = 2;
+    uint32 seq = 3;
+    uint32 ack = 4;
+    uint32 data_offset = 5;
+    uint32 window = 6;
+    uint32 checksum = 7;
+    uint32 urgent_pointer = 8;
+}
+
+message LayerUDP {
+    uint32 src_port = 1;
+    uint32 dest_port = 2;
+    uint32 length = 3;
+    uint32 checksum = 4;
+}
+
+message LayerICMPV4 {
+	string typeCode = 1;
+	uint32 checksum = 2;
+	uint32 id       = 3;
+	uint32 seq      = 4;
+}
+
+message LayerICMPV6 {
+	string typeCode = 1;
+	uint32 checksum = 2;
+}
+
+
+message StreamPacketsResponse {
+    oneof response {
+        ActivateCommand activateCommand = 1;
+    }   
+}
+
+message ActivateCommand {
+    bool activate = 1;
+}

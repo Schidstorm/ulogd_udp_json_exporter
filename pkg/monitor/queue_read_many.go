@@ -2,9 +2,11 @@ package monitor
 
 import (
 	"sync"
+
+	"github.com/schidstorm/ulogd_monitor/pkg/pb"
 )
 
-type QueueHandler func(packet Packet)
+type QueueHandler func(packet *pb.Packet)
 type QueueHandlerId int
 
 type QueueReadMany struct {
@@ -22,7 +24,7 @@ func (q *QueueReadMany) Start(queue PacketQueue) error {
 	}
 }
 
-func (q *QueueReadMany) distribute(packet Packet) {
+func (q *QueueReadMany) distribute(packet *pb.Packet) {
 	q.mutex.Lock()
 	defer q.mutex.Unlock()
 

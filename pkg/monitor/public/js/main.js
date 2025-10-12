@@ -1,7 +1,17 @@
 
 const maxPacketItems = 500;
 
-main();
+docReady(main);
+
+function docReady(fn) {
+    // see if DOM is already available
+    if (document.readyState === "complete" || document.readyState === "interactive") {
+        // call on next available tick
+        setTimeout(fn, 1);
+    } else {
+        document.addEventListener("DOMContentLoaded", fn);
+    }
+} 
 
 function main() {
     const toggleButton = document.getElementById('toggle');
@@ -21,7 +31,6 @@ function main() {
 }
 
 
-
 async function messageHandler(event) {
     if (!event.data.text) {
         return;
@@ -30,10 +39,57 @@ async function messageHandler(event) {
     const stringData = await event.data.text();
 
     try {
-        // {"NflogPacket": {"Family":2,"Protocol":6,"PayloadLen":100,"Prefix":null,"Indev":"eth0","Outdev":"eth1","Network":{"SrcIp":"192.168.1.1","DestIp":"192.168.1.2","Protocol":6,"Transport":{"SrcPort":80,"DestPort":34}}}, "Hostname": "localhost"}
-        var packet = JSON.parse(stringData);
+        /* 
+            {"metadata":{"hostname":"wlan","capture_length":60,"length":60,"prefix":"accept"},"layers":[
+                {"Layer":{"Ethernet":{"ethertype":2048}}},
+                {"type":1,"Layer":{"Ipv4":{"src_ip":"192.168.1.9","dest_ip":"192.168.1.155","protocol":17,"ttl":64}}},
+                {"type":4,"Layer":{"Udp":{"src_port":37177,"dest_port":53,"length":40,"checksum":33838}}}]}
+        */
+        let packet = JSON.parse(stringData);
+        packet = compactPacket(packet);
         insertPacket(packet);
     } catch (e) { }
+}
+
+function compactPacket(packet) {
+    let result = {};
+    result = { ...packet.metadata };
+    for (let layer of packet.layers) {
+        layer = layer.Layer;
+        const layerType = Object.keys(layer)[0];
+        result = { ...result, ...layer[layerType] };
+    }
+    return result;
+}
+
+class Packet {
+    constructor(data) {
+        console.log(data);
+        this.hostname = data.hostname || '';
+        this.src = `${data.src_ip || ''}${data.src_port ? ':'+data.src_port : ''}`;
+        this.dest = `${data.dest_ip || ''}${data.dest_port ? ':'+data.dest_port : ''}`;
+
+        let transportProtocol = data.protocol || data.next_header || '';
+        this.protocol = humanizeService(data.dest_port, transportProtocol) || transportProtocol || '';
+        this.length = humanizeSize(data.length) || '';
+        this.hook = data.hook || '';
+        this.accept = data.prefix === 'accept';
+    }
+}
+
+function humanizeService(port, protocol) {
+  if  (!port || !protocol) {
+    return undefined;
+  }
+
+  if (!serviceMap) {
+    serviceMap = {};
+    for (let service of services) {
+      serviceMap[`${service.port}/${service.protocol}`] = service.name;
+    }
+  }
+
+  return serviceMap[`${port}/${protocol.toLowerCase()}`] || `${port}/${protocol}`;
 }
 
 function insertPacket(packet) {
@@ -48,66 +104,44 @@ function insertPacket(packet) {
     }
 }
 
-function packetToHtml(packet) {
-    var html = document.createElement('div');
-    html.className = 'packet';
+function packetToHtml(rawPacket) {
+    const packet = new Packet(rawPacket);
 
-    const hostname = packet.Hostname;
-    packet = packet.NflogPacket;
-
-    const item = html.appendChild(fieldToHtml('Hostname', hostname));
-    if (item) {
-        html.appendChild(item);
-    }
-    
-    for (var key of Object.keys(packet)) {
-        var value = packet[key];
-
-        const item = html.appendChild(fieldToHtml(key, value));
-        if (item) {
-            html.appendChild(item);
-        }
-    }
-
-    return html;
-}
-
-function fieldToHtml(key, value) {
-    var div = document.createElement('div');
-    div.className = 'packet-item ' + key;
-
-    if (!value) {
-        return div;
-    }
-
-    if (key === 'Network') {
-        const srcIp = valueToText('SrcIp', value.SrcIp);
-        const destIp = valueToText('DestIp', value.DestIp);
-        const srcPort = value.Transport ? valueToText('SrcPort', value.Transport.SrcPort) : "";
-        const destPort = value.Transport ? valueToText('DestPort', value.Transport.DestPort): "";
-
-        div.innerText = `${srcIp} -> ${destIp} (${srcPort} → ${destPort})`;
+    let direction = '';
+    if (packet.hook === 'prerouting' || packet.hook === 'input') {
+        direction = `
+            <span class="direction arrow">↢</span>
+            <span class="direction left">${packet.src}</span>
+        `;
+    } else if (packet.hook === 'postrouting' || packet.hook === 'output') {
+        direction = `
+            <span class="direction arrow">↣</span>
+            <span class="direction right">${packet.dest}</span>
+        `;
+    } else if (packet.hook === 'forward') {
+        direction = `
+            <span class="direction left">${packet.src}</span>
+            <span class="direction arrow">⇴</span>
+            <span class="direction right">${packet.dest}</span>
+        `;
     } else {
-        div.innerText = valueToText(key, value);
+        direction = `
+            <span class="direction left">${packet.src}</span>
+            <span class="direction arrow">↣</span>
+            <span class="direction right">${packet.dest}</span>
+        `;
     }
 
-    
-    return div;
-}
-
-function valueToText(key, value) {
-    switch (key) {
-        case 'Family':
-            return familyToText(value);
-        case 'Protocol':
-            return protocolToText(value);
-        case 'PayloadLen':
-            return humanizeSize(value);
-        default:
-            return value;
-    }
-
-    return value;
+    const content = `<div class="packet ${packet.accept ? 'accept' : 'drop'}">
+        <div class="labels">
+            <span class="label">${packet.hostname}</span>
+            <span class="label">${packet.protocol}</span>
+        </div>
+        ${direction}
+    </div>`;
+    const div = document.createElement('div');
+    div.innerHTML = content;
+    return div.firstChild;
 }
 
 function familyToText(family) {
