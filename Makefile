@@ -1,10 +1,8 @@
 project = ulogd_monitor
 arch = $(shell /usr/local/go/bin/go env GOARCH)
 
-all: test build
+all: build
 
-test:
-	echo no tests
 
 build: tidy build_arm64 build_arch
 
@@ -14,7 +12,7 @@ tidy:
 build_arm64:
 	bash remoteBuild.sh "$(shell cat remotes.txt)"
 
-build_arch: test
+build_arch: 
 	sudo apt-get install -y libnetfilter-log-dev && \
 	CGO_ENABLED=1 /usr/local/go/bin/go build -v -a -o ulogd_monitor_$(arch) ./cmd/monitor
 	

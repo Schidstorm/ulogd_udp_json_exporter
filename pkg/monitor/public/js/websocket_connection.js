@@ -1,4 +1,4 @@
-class WebsocketConnection {
+export class WebsocketConnection {
     constructor(handler) {
         const url = new URL("/packets", location.href);
         if (url.protocol === 'http:') {

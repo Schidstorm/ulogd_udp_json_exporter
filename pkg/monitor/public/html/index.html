@@ -10,17 +10,22 @@
 <body>
     <div class="header">
         <div class="title">NfLog Monitor</div>
-        <div class="search"></div>
+        <div class="search">
+            <input type="text" id="filter" placeholder="Filter...">
+        </div>
         <div class="buttons">
             <button id="toggle">Disconnect</button>
         </div>
     </div>
-    <div id="monitor">
+    <div class="content">
+        <div id="statistics" class="statistics">
+            <div class="labels-stats">
 
+            </div>
+        </div>
+        <div id="monitor"></div>
     </div>
-
-    <script src="js/websocket_connection.js" async></script>
-    <script src="js/services.js" async></script>
-    <script src="js/main.js" async></script>
+    
+    <script src="js/main.js" type="module" async></script>
 </body>
 </html>

@@ -1,8 +1,4 @@
-let serviceMap = null;
-
-
-
-const services = [
+export const services = [
   {
     "port": 1,
     "protocol": "tcp",

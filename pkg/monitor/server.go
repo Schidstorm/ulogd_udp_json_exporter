@@ -128,7 +128,7 @@ func (s *Server) packets(w http.ResponseWriter, r *http.Request) {
 				break
 			}
 			message = []byte(mockPackets[randomIndex.Int64()])
-			time.Sleep(500 * time.Millisecond)
+			time.Sleep(25 * time.Millisecond)
 		} else {
 			packet := readQueue.Dequeue()
 			message, err = json.Marshal(&packet)
