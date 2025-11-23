@@ -30,12 +30,13 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"time"
 	"unsafe"
 
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
 	"github.com/rs/zerolog/log"
-	"github.com/schidstorm/ulogd_monitor/pkg/pb"
+	"github.com/schidstorm/ulogd_monitor/pkg/packet"
 )
 
 var nfLogMessageBufferSize = C.size_t(65536)
@@ -128,10 +129,18 @@ func (n *NfLog) callback(nfmsg *C.struct_nfgenmsg, nfad *C.struct_nflog_data) in
 	return 0
 }
 
-func interpretPacket(ldata *C.struct_nflog_data, pfFamily uint8) *pb.Packet {
-	packet := pb.Packet{
-		Metadata: &pb.PacketMetadata{},
-		Layers:   []*pb.Layer{},
+func interpretPacket(ldata *C.struct_nflog_data, pfFamily uint8) *packet.Packet {
+	p := packet.Packet{
+		Metadata: &packet.PacketMetadata{},
+		Layers:   []*packet.Layer{},
+	}
+
+	// Timestamp
+	var tv C.struct_timeval
+	if C.nflog_get_timestamp(ldata, &tv) == 0 {
+		p.Metadata.Timestamp = time.Unix(int64(tv.tv_sec), int64(tv.tv_usec)*1000)
+	} else {
+		p.Metadata.Timestamp = time.Now()
 	}
 
 	// Header
@@ -139,11 +148,9 @@ func interpretPacket(ldata *C.struct_nflog_data, pfFamily uint8) *pb.Packet {
 	if ph != nil {
 		proto := uint16(C.ntohs(ph.hw_protocol))
 		gopacketProto := layers.EthernetType(proto)
-		packet.Layers = append(packet.Layers, &pb.Layer{
-			Layer: &pb.Layer_Ethernet{
-				Ethernet: &pb.LayerEthernet{
-					Ethertype: gopacketProto.String(),
-				},
+		p.Layers = append(p.Layers, &packet.Layer{
+			Ethernet: &packet.LayerEthernet{
+				Ethertype: gopacketProto.String(),
 			},
 		})
 
@@ -162,20 +169,20 @@ func interpretPacket(ldata *C.struct_nflog_data, pfFamily uint8) *pb.Packet {
 		default:
 			hook = ""
 		}
-		packet.Metadata.Hook = hook
+		p.Metadata.Hook = hook
 	}
 
 	// Payload
 	var payload *C.char
 	payloadLen := C.nflog_get_payload(ldata, &payload)
 	if payloadLen >= 0 {
-		packet.Metadata.CaptureLength = uint32(payloadLen)
-		packet.Metadata.Length = uint32(payloadLen)
+		p.Metadata.CaptureLength = uint32(payloadLen)
+		p.Metadata.Length = uint32(payloadLen)
 		packetLayers, err := interpretNetwork(C.GoBytes(unsafe.Pointer(payload), payloadLen), pfFamily)
 		if err != nil {
 			log.Info().Err(err).Msg("failed to interpret network layer")
 		} else {
-			packet.Layers = append(packet.Layers, packetLayers...)
+			p.Layers = append(p.Layers, packetLayers...)
 		}
 	}
 
@@ -183,7 +190,7 @@ func interpretPacket(ldata *C.struct_nflog_data, pfFamily uint8) *pb.Packet {
 	prefix := C.nflog_get_prefix(ldata)
 	if prefix != nil {
 		prefixStr := C.GoString(prefix)
-		packet.Metadata.Prefix = prefixStr
+		p.Metadata.Prefix = prefixStr
 	}
 
 	// // interfaces
@@ -192,10 +199,10 @@ func interpretPacket(ldata *C.struct_nflog_data, pfFamily uint8) *pb.Packet {
 	// outdev := uint32(C.nflog_get_outdev(ldata))
 	// packet.Outdev = getInterfaceName(outdev)
 
-	return &packet
+	return &p
 }
 
-func interpretNetwork(payload []byte, family uint8) ([]*pb.Layer, error) {
+func interpretNetwork(payload []byte, family uint8) ([]*packet.Layer, error) {
 	switch family {
 	case AF_INET: // AF_INET
 		return interpretIPv4(payload)
@@ -206,7 +213,7 @@ func interpretNetwork(payload []byte, family uint8) ([]*pb.Layer, error) {
 	}
 }
 
-func interpretIPv4(payload []byte) ([]*pb.Layer, error) {
+func interpretIPv4(payload []byte) ([]*packet.Layer, error) {
 	packet := gopacket.NewPacket(payload, layers.LayerTypeIPv4, gopacket.Default)
 	if err := packet.ErrorLayer(); err != nil {
 		return nil, err.Error()
@@ -215,7 +222,7 @@ func interpretIPv4(payload []byte) ([]*pb.Layer, error) {
 	return gopacketTolayers(packet), nil
 }
 
-func interpretIPv6(payload []byte) ([]*pb.Layer, error) {
+func interpretIPv6(payload []byte) ([]*packet.Layer, error) {
 	packet := gopacket.NewPacket(payload, layers.LayerTypeIPv6, gopacket.Default)
 	packet.Metadata()
 	if err := packet.ErrorLayer(); err != nil {
@@ -225,85 +232,71 @@ func interpretIPv6(payload []byte) ([]*pb.Layer, error) {
 	return gopacketTolayers(packet), nil
 }
 
-func gopacketTolayers(packet gopacket.Packet) []*pb.Layer {
-	var layersList []*pb.Layer
-	for _, layer := range packet.Layers() {
+func gopacketTolayers(p gopacket.Packet) []*packet.Layer {
+	var layersList []*packet.Layer
+	for _, layer := range p.Layers() {
 		switch l := layer.(type) {
 		case *layers.Ethernet:
-			layersList = append(layersList, &pb.Layer{
-				Layer: &pb.Layer_Ethernet{
-					Ethernet: &pb.LayerEthernet{
-						SrcMac:    l.SrcMAC.String(),
-						DestMac:   l.DstMAC.String(),
-						Ethertype: l.EthernetType.String(),
-					},
+			layersList = append(layersList, &packet.Layer{
+				Ethernet: &packet.LayerEthernet{
+					SrcMac:    l.SrcMAC.String(),
+					DestMac:   l.DstMAC.String(),
+					Ethertype: l.EthernetType.String(),
 				},
 			})
 		case *layers.IPv4:
-			layersList = append(layersList, &pb.Layer{
-				Layer: &pb.Layer_Ipv4{
-					Ipv4: &pb.LayerIPv4{
-						SrcIp:    l.SrcIP.String(),
-						DestIp:   l.DstIP.String(),
-						Protocol: l.Protocol.String(),
-						Ttl:      uint32(l.TTL),
-					},
+			layersList = append(layersList, &packet.Layer{
+				Ipv4: &packet.LayerIPv4{
+					SrcIp:    l.SrcIP.String(),
+					DestIp:   l.DstIP.String(),
+					Protocol: l.Protocol.String(),
+					Ttl:      uint32(l.TTL),
 				},
 			})
 		case *layers.IPv6:
-			layersList = append(layersList, &pb.Layer{
-				Layer: &pb.Layer_Ipv6{
-					Ipv6: &pb.LayerIPv6{
-						SrcIp:      l.SrcIP.String(),
-						DestIp:     l.DstIP.String(),
-						NextHeader: l.NextHeader.String(),
-						HopLimit:   uint32(l.HopLimit),
-					},
+			layersList = append(layersList, &packet.Layer{
+				Ipv6: &packet.LayerIPv6{
+					SrcIp:      l.SrcIP.String(),
+					DestIp:     l.DstIP.String(),
+					NextHeader: l.NextHeader.String(),
+					HopLimit:   uint32(l.HopLimit),
 				},
 			})
 		case *layers.TCP:
-			layersList = append(layersList, &pb.Layer{
-				Layer: &pb.Layer_Tcp{
-					Tcp: &pb.LayerTCP{
-						SrcPort:       uint32(l.SrcPort),
-						DestPort:      uint32(l.DstPort),
-						Seq:           l.Seq,
-						Ack:           l.Ack,
-						DataOffset:    uint32(l.DataOffset),
-						Window:        uint32(l.Window),
-						Checksum:      uint32(l.Checksum),
-						UrgentPointer: uint32(l.Urgent),
-					},
+			layersList = append(layersList, &packet.Layer{
+				Tcp: &packet.LayerTCP{
+					SrcPort:       uint32(l.SrcPort),
+					DestPort:      uint32(l.DstPort),
+					Seq:           l.Seq,
+					Ack:           l.Ack,
+					DataOffset:    uint32(l.DataOffset),
+					Window:        uint32(l.Window),
+					Checksum:      uint32(l.Checksum),
+					UrgentPointer: uint32(l.Urgent),
 				},
 			})
 		case *layers.UDP:
-			layersList = append(layersList, &pb.Layer{
-				Layer: &pb.Layer_Udp{
-					Udp: &pb.LayerUDP{
-						SrcPort:  uint32(l.SrcPort),
-						DestPort: uint32(l.DstPort),
-						Length:   uint32(l.Length),
-						Checksum: uint32(l.Checksum),
-					},
+			layersList = append(layersList, &packet.Layer{
+				Udp: &packet.LayerUDP{
+					SrcPort:  uint32(l.SrcPort),
+					DestPort: uint32(l.DstPort),
+					Length:   uint32(l.Length),
+					Checksum: uint32(l.Checksum),
 				},
 			})
 		case *layers.ICMPv4:
-			layersList = append(layersList, &pb.Layer{
-				Layer: &pb.Layer_Icmpv4{
-					Icmpv4: &pb.LayerICMPV4{
-						TypeCode: l.TypeCode.String(),
-						Id:       uint32(l.Id),
-						Seq:      uint32(l.Seq),
-					},
+			layersList = append(layersList, &packet.Layer{
+				Icmpv4: &packet.LayerICMPV4{
+					TypeCode: l.TypeCode.String(),
+					Id:       uint32(l.Id),
+					Seq:      uint32(l.Seq),
 				},
 			})
 		case *layers.ICMPv6:
-			layersList = append(layersList, &pb.Layer{
-				Layer: &pb.Layer_Icmpv6{
-					Icmpv6: &pb.LayerICMPV6{
-						TypeCode: l.TypeCode.String(),
-						Checksum: uint32(l.Checksum),
-					},
+			layersList = append(layersList, &packet.Layer{
+				Icmpv6: &packet.LayerICMPV6{
+					TypeCode: l.TypeCode.String(),
+					Checksum: uint32(l.Checksum),
 				},
 			})
 		}

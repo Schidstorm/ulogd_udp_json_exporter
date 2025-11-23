@@ -1,26 +1,26 @@
 package monitor
 
-import "github.com/schidstorm/ulogd_monitor/pkg/pb"
+import "github.com/schidstorm/ulogd_monitor/pkg/packet"
 
 const packetQueueSize = 128
 
 type PacketQueue struct {
-	packetQueue chan *pb.Packet
+	packetQueue chan *packet.Packet
 }
 
 func CreatePacketQueue() PacketQueue {
 	return PacketQueue{
-		packetQueue: make(chan *pb.Packet, packetQueueSize),
+		packetQueue: make(chan *packet.Packet, packetQueueSize),
 	}
 }
 
-func (pq PacketQueue) Enqueue(packet *pb.Packet) {
+func (pq PacketQueue) Enqueue(packet *packet.Packet) {
 	select {
 	case pq.packetQueue <- packet:
 	default:
 	}
 }
 
-func (pq PacketQueue) Dequeue() *pb.Packet {
+func (pq PacketQueue) Dequeue() *packet.Packet {
 	return <-pq.packetQueue
 }

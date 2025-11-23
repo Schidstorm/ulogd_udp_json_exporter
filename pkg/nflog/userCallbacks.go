@@ -3,10 +3,10 @@ package nflog
 import (
 	"sync"
 
-	"github.com/schidstorm/ulogd_monitor/pkg/pb"
+	"github.com/schidstorm/ulogd_monitor/pkg/packet"
 )
 
-type CallbackFunc func(packet *pb.Packet)
+type CallbackFunc func(packet *packet.Packet)
 
 type UserCallback struct {
 	id       uint32
@@ -26,7 +26,7 @@ func registerUserCallback(callback CallbackFunc) uint32 {
 	return id
 }
 
-func callCallback(id uint32, packet *pb.Packet) {
+func callCallback(id uint32, packet *packet.Packet) {
 	mutex.Lock()
 	defer mutex.Unlock()
 
